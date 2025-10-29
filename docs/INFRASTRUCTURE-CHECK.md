@@ -279,6 +279,173 @@ chmod +x check-services.sh
 
 ---
 
+## 🤖 Automated Infrastructure Check
+
+### Quick Check Script
+
+We've created an automated script that checks all services for you!
+
+**Location:** `scripts/check-infrastructure.sh`
+
+### How to Use
+
+```bash
+# Make sure you're in the project root directory
+cd /path/to/asil-lakehouse-poc
+
+# Run the automated check
+./scripts/check-infrastructure.sh
+```
+
+### What It Checks
+
+The script automatically verifies:
+
+1. **PostgreSQL:**
+   - ✅ Container is running
+   - ✅ Database is accepting connections
+   - ✅ `socialnet` database exists
+
+2. **MinIO:**
+   - ✅ Container is running
+   - ✅ Health endpoint responding
+   - ✅ `warehouse` bucket exists (warns if missing)
+
+3. **Iceberg REST:**
+   - ✅ Container is running
+   - ✅ API endpoints responding
+   - ✅ Configuration accessible
+
+4. **DuckDB:**
+   - ✅ Container is running
+   - ✅ Service is healthy
+   - ✅ Can execute test queries
+
+### Sample Output
+
+```
+  ASIL Lakehouse Infrastructure Check
+
+ℹ️ Checking Docker Containers...
+
+1️⃣  PostgreSQL Database
+✅ PostgreSQL is running
+✅ PostgreSQL is ready and accepting connections
+✅ Database 'socialnet' exists
+
+2️⃣  MinIO Object Storage
+✅ MinIO is running
+✅ MinIO health endpoint responding
+✅ MinIO 'warehouse' bucket exists
+
+3️⃣  Iceberg REST Catalog
+✅ Iceberg REST is running
+✅ Iceberg REST catalog responding
+✅ Iceberg REST namespaces endpoint accessible
+
+4️⃣  DuckDB Query Service
+✅ DuckDB is running
+✅ DuckDB service is healthy
+✅ DuckDB test query successful
+
+  Summary
+
+✅ All services are healthy! (4/4)
+
+🌐 Access Points:
+   • MinIO Console:    http://localhost:9001 (minioadmin/minioadmin)
+   • DuckDB API:       http://localhost:8082
+   • Iceberg REST:     http://localhost:8181/v1/*
+   • PostgreSQL:       localhost:5433 (lakeuser/lakepass123)
+```
+
+### Exit Codes
+
+The script returns different exit codes for automation:
+
+- **0** - All services healthy
+- **1** - Some services unhealthy
+- **2** - No services healthy
+
+**Use in CI/CD:**
+```bash
+# In your CI/CD pipeline
+./scripts/check-infrastructure.sh
+if [ $? -eq 0 ]; then
+    echo "Infrastructure ready, proceeding with tests"
+else
+    echo "Infrastructure not ready, failing build"
+    exit 1
+fi
+```
+
+### Scheduling Regular Checks
+
+**Option 1: Cron Job (Linux/Mac)**
+```bash
+# Check every 5 minutes
+*/5 * * * * cd /path/to/asil-lakehouse-poc && ./scripts/check-infrastructure.sh >> /var/log/lakehouse-check.log 2>&1
+```
+
+**Option 2: Watch Command**
+```bash
+# Check every 30 seconds
+watch -n 30 ./scripts/check-infrastructure.sh
+```
+
+**Option 3: Systemd Timer (Linux)**
+```bash
+# Create /etc/systemd/system/lakehouse-check.service
+[Unit]
+Description=Lakehouse Infrastructure Check
+
+[Service]
+Type=oneshot
+WorkingDirectory=/path/to/asil-lakehouse-poc
+ExecStart=/path/to/asil-lakehouse-poc/scripts/check-infrastructure.sh
+
+# Create /etc/systemd/system/lakehouse-check.timer
+[Unit]
+Description=Run Lakehouse Check Every 5 Minutes
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=5min
+
+[Install]
+WantedBy=timers.target
+
+# Enable and start
+sudo systemctl enable lakehouse-check.timer
+sudo systemctl start lakehouse-check.timer
+```
+
+### Integration with Monitoring Tools
+
+**Prometheus Integration:**
+```bash
+# Export metrics format
+./scripts/check-infrastructure.sh | grep "✅\|❌" | \
+  awk '{print "lakehouse_service_health{service=\""$2"\"} " ($1=="✅"?1:0)}'
+```
+
+**Slack Notifications:**
+```bash
+#!/bin/bash
+# check-and-notify.sh
+
+OUTPUT=$(./scripts/check-infrastructure.sh)
+EXIT_CODE=$?
+
+if [ $EXIT_CODE -ne 0 ]; then
+    curl -X POST -H 'Content-type: application/json' \
+    --data "{\"text\":\"⚠️ Lakehouse Infrastructure Issue\n\`\`\`$OUTPUT\`\`\`\"}" \
+    YOUR_SLACK_WEBHOOK_URL
+fi
+```
+
+---
+
 ## 🚀 Next Steps
 
 Once all services are healthy:
@@ -286,6 +453,7 @@ Once all services are healthy:
 1. **Verify MinIO buckets:**
    - Login to http://localhost:9001
    - Check that `warehouse` bucket exists
+   - Or run: `./scripts/check-infrastructure.sh` (it checks automatically!)
 
 2. **Test DuckDB:**
    ```bash
@@ -296,4 +464,10 @@ Once all services are healthy:
    - Edit `docker/postgres/init.sql`
    - Restart postgres: `docker-compose restart postgres`
 
-4. **Start building ETL and AI Agent services**
+4. **Run automated checks regularly:**
+   ```bash
+   # Add to your daily workflow
+   ./scripts/check-infrastructure.sh
+   ```
+
+5. **Start building ETL and AI Agent services**
