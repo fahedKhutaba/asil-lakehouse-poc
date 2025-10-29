@@ -22,7 +22,7 @@ services:
     networks:
       - lakehouse-network
 
-  # MinIO - Object Storage (S3-compatible)
+  # MinIO - Object Storage (S3-compatible) for Iceberg tables
   minio:
     image: minio/minio:latest
     container_name: lakehouse-poc-minio
@@ -43,23 +43,164 @@ services:
     networks:
       - lakehouse-network
 
-  # AI Agent Service (FastAPI)
+  # MinIO Client - Initialize buckets for Iceberg
+  minio-init:
+    image: minio/mc:latest
+    container_name: lakehouse-poc-minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set myminio http://minio:9000 minioadmin minioadmin;
+      mc mb myminio/lakehouse --ignore-existing;
+      mc mb myminio/warehouse --ignore-existing;
+      mc anonymous set download myminio/lakehouse;
+      mc anonymous set download myminio/warehouse;
+      exit 0;
+      "
+    networks:
+      - lakehouse-network
+
+  # Apache Spark with Iceberg - For Lakehouse operations
+  spark-iceberg:
+    image: apache/spark:3.5.0-scala2.12-java11-python3-ubuntu
+    container_name: lakehouse-poc-spark
+    environment:
+      - SPARK_MODE=master
+      - SPARK_MASTER_HOST=spark-iceberg
+      - AWS_ACCESS_KEY_ID=${MINIO_ACCESS_KEY:-minioadmin}
+      - AWS_SECRET_ACCESS_KEY=${MINIO_SECRET_KEY:-minioadmin}
+      - AWS_REGION=us-east-1
+    ports:
+      - "8080:8080"  # Spark Master Web UI
+      - "7077:7077"  # Spark Master
+      - "4040:4040"  # Spark Application UI
+    volumes:
+      - ./docker/spark/spark-defaults.conf:/opt/spark/conf/spark-defaults.conf
+      - ./data:/app/data
+      - spark_warehouse:/opt/spark/warehouse
+    depends_on:
+      - minio
+      - minio-init
+    networks:
+      - lakehouse-network
+    command: >
+      bash -c "
+      pip install pyiceberg[s3fs,pyarrow,duckdb] &&
+      /opt/spark/bin/spark-class org.apache.spark.deploy.master.Master
+      "
+
+  # Iceberg REST Catalog (optional but recommended)
+  iceberg-rest:
+    image: tabulario/iceberg-rest:latest
+    container_name: lakehouse-poc-iceberg-rest
+    environment:
+      - AWS_ACCESS_KEY_ID=${MINIO_ACCESS_KEY:-minioadmin}
+      - AWS_SECRET_ACCESS_KEY=${MINIO_SECRET_KEY:-minioadmin}
+      - AWS_REGION=us-east-1
+      - CATALOG_WAREHOUSE=s3://warehouse/
+      - CATALOG_IO__IMPL=org.apache.iceberg.aws.s3.S3FileIO
+      - CATALOG_S3_ENDPOINT=http://minio:9000
+    ports:
+      - "8181:8181"
+    depends_on:
+      - minio
+      - minio-init
+    networks:
+      - lakehouse-network
+
+  # DuckDB Service - For analytical queries
+  duckdb:
+    build:
+      context: .
+      dockerfile: docker/duckdb/Dockerfile
+    container_name: lakehouse-poc-duckdb
+    environment:
+      - AWS_ACCESS_KEY_ID=${MINIO_ACCESS_KEY:-minioadmin}
+      - AWS_SECRET_ACCESS_KEY=${MINIO_SECRET_KEY:-minioadmin}
+      - AWS_REGION=us-east-1
+      - S3_ENDPOINT=http://minio:9000
+    ports:
+      - "8082:8082"  # DuckDB HTTP API
+    volumes:
+      - ./data:/app/data
+      - duckdb_data:/app/duckdb
+    depends_on:
+      - minio
+      - minio-init
+    networks:
+      - lakehouse-network
+
+  # ETL Service - Extract, Transform, Load to Iceberg
+  etl:
+    build:
+      context: .
+      dockerfile: docker/etl/Dockerfile
+    container_name: lakehouse-poc-etl
+    environment:
+      # OLTP Source
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=${POSTGRES_DB:-socialnet}
+      - POSTGRES_USER=${POSTGRES_USER:-lakeuser}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-lakepass123}
+      # Object Storage
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-minioadmin}
+      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-minioadmin}
+      - AWS_ACCESS_KEY_ID=${MINIO_ACCESS_KEY:-minioadmin}
+      - AWS_SECRET_ACCESS_KEY=${MINIO_SECRET_KEY:-minioadmin}
+      - AWS_REGION=us-east-1
+      - S3_ENDPOINT=http://minio:9000
+      # Iceberg
+      - ICEBERG_REST_URI=http://iceberg-rest:8181
+      - ICEBERG_WAREHOUSE=s3://warehouse/
+      # ETL Config
+      - ETL_BATCH_SIZE=${ETL_BATCH_SIZE:-10000}
+      - ETL_SCHEDULE_INTERVAL=${ETL_SCHEDULE_INTERVAL:-3600}
+    volumes:
+      - ./src:/app/src
+      - ./data:/app/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      iceberg-rest:
+        condition: service_started
+    networks:
+      - lakehouse-network
+
+  # AI Agent Service (FastAPI) - Query routing and NL to SQL
   ai-agent:
     build:
       context: .
       dockerfile: docker/ai-agent/Dockerfile
     container_name: lakehouse-poc-ai-agent
     environment:
+      # OLTP Database
       - POSTGRES_HOST=postgres
       - POSTGRES_PORT=5432
       - POSTGRES_DB=${POSTGRES_DB:-socialnet}
       - POSTGRES_USER=${POSTGRES_USER:-lakeuser}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-lakepass123}
+      # Object Storage
       - MINIO_ENDPOINT=minio:9000
       - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-minioadmin}
       - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-minioadmin}
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      # DuckDB for Lakehouse queries
       - DUCKDB_PATH=/app/data/lakehouse.duckdb
+      - DUCKDB_SERVICE_URL=http://duckdb:8082
+      # Iceberg
+      - ICEBERG_REST_URI=http://iceberg-rest:8181
+      - AWS_ACCESS_KEY_ID=${MINIO_ACCESS_KEY:-minioadmin}
+      - AWS_SECRET_ACCESS_KEY=${MINIO_SECRET_KEY:-minioadmin}
+      - S3_ENDPOINT=http://minio:9000
+      # AI Configuration
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4}
+      - LLM_TEMPERATURE=${LLM_TEMPERATURE:-0.0}
     ports:
       - "8000:8000"
     volumes:
@@ -70,40 +211,19 @@ services:
         condition: service_healthy
       minio:
         condition: service_healthy
+      duckdb:
+        condition: service_started
+      iceberg-rest:
+        condition: service_started
     networks:
       - lakehouse-network
     command: uvicorn src.ai_agent.main:app --host 0.0.0.0 --port 8000 --reload
 
-  # ETL Service
-  etl:
-    build:
-      context: .
-      dockerfile: docker/etl/Dockerfile
-    container_name: lakehouse-poc-etl
-    environment:
-      - POSTGRES_HOST=postgres
-      - POSTGRES_PORT=5432
-      - POSTGRES_DB=${POSTGRES_DB:-socialnet}
-      - POSTGRES_USER=${POSTGRES_USER:-lakeuser}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-lakepass123}
-      - MINIO_ENDPOINT=minio:9000
-      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-minioadmin}
-      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-minioadmin}
-      - ETL_BATCH_SIZE=${ETL_BATCH_SIZE:-10000}
-    volumes:
-      - ./src:/app/src
-      - ./data:/app/data
-    depends_on:
-      postgres:
-        condition: service_healthy
-      minio:
-        condition: service_healthy
-    networks:
-      - lakehouse-network
-
 volumes:
   postgres_data:
   minio_data:
+  spark_warehouse:
+  duckdb_data:
 
 networks:
   lakehouse-network:
