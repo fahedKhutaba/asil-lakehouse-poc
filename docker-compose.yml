@@ -10,7 +10,7 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-lakeuser}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-lakepass123}
     ports:
-      - "5432:5432"
+      - "5433:5432"  # Changed to 5433 to avoid conflict
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
