@@ -1,0 +1,92 @@
+# Prometheus Configuration for ASIL Lakehouse POC
+# This configuration defines scrape targets for currently running services with metrics endpoints
+
+global:
+  scrape_interval: 15s      # How often to scrape targets
+  evaluation_interval: 15s  # How often to evaluate rules
+  external_labels:
+    cluster: 'lakehouse-poc'
+    environment: 'development'
+
+# Rule files for alerting
+rule_files:
+  - '/etc/prometheus/rules/*.yml'
+
+# Scrape configurations - Only for services that are running and have metrics
+scrape_configs:
+  # Prometheus itself
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+        labels:
+          service: 'prometheus'
+
+  # PostgreSQL Database Metrics (via postgres-exporter)
+  - job_name: 'postgres'
+    static_configs:
+      - targets: ['postgres-exporter:9187']
+        labels:
+          service: 'postgresql'
+          database: 'socialnet'
+
+  # OpenTelemetry Collector Metrics
+  - job_name: 'otel-collector'
+    static_configs:
+      - targets: ['otel-collector:8888']
+        labels:
+          service: 'otel-collector'
+
+  # Grafana Metrics
+  - job_name: 'grafana'
+    static_configs:
+      - targets: ['grafana:3000']
+        labels:
+          service: 'grafana'
+    metrics_path: /metrics
+
+  # ============================================
+  # SERVICES TO BE INSTRUMENTED (Currently disabled)
+  # Uncomment these when services expose metrics endpoints
+  # ============================================
+
+  # MinIO Object Storage Metrics
+  # Note: MinIO requires authentication for metrics endpoint
+  # - job_name: 'minio'
+  #   metrics_path: /minio/v2/metrics/cluster
+  #   scheme: http
+  #   static_configs:
+  #     - targets: ['minio:9000']
+  #       labels:
+  #         service: 'minio'
+
+  # DuckDB Service Metrics (to be instrumented with OpenTelemetry)
+  # - job_name: 'duckdb-service'
+  #   static_configs:
+  #     - targets: ['duckdb:8082']
+  #       labels:
+  #         service: 'duckdb'
+  #   metrics_path: /metrics
+
+  # AI Agent Service Metrics (to be instrumented with OpenTelemetry)
+  # - job_name: 'ai-agent'
+  #   static_configs:
+  #     - targets: ['ai-agent:8000']
+  #       labels:
+  #         service: 'ai-agent'
+  #   metrics_path: /metrics
+
+  # ETL Pipeline Metrics (to be instrumented with OpenTelemetry)
+  # - job_name: 'etl-pipeline'
+  #   static_configs:
+  #     - targets: ['etl:8083']
+  #       labels:
+  #         service: 'etl'
+  #   metrics_path: /metrics
+
+  # Iceberg REST Catalog (does not expose Prometheus metrics by default)
+  # - job_name: 'iceberg-rest'
+  #   static_configs:
+  #     - targets: ['iceberg-rest:8181']
+  #       labels:
+  #         service: 'iceberg-rest'
+  #   metrics_path: /metrics

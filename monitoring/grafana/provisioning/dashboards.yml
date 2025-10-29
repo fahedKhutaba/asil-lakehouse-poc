@@ -1,0 +1,17 @@
+# Grafana Dashboard Provisioning Configuration
+# This file tells Grafana where to find dashboard JSON files
+
+apiVersion: 1
+
+providers:
+  # Main dashboards provider
+  - name: 'Lakehouse Dashboards'
+    orgId: 1
+    folder: 'Lakehouse POC'
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 10
+    allowUiUpdates: true
+    options:
+      path: /etc/grafana/provisioning/dashboards
+      foldersFromFilesStructure: true
